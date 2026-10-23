@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OT Tracker Pro</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        // วันหยุดเริ่มต้น บริษัท ไทเกอร์ รัน จำกัด ประจำปี 2569
+        const defaultHolidays = [
+            "2026-01-01", "2026-03-03", "2026-04-13", "2026-04-14", "2026-04-15",
+            "2026-05-01", "2026-07-28", "2026-07-29", "2026-07-30", "2026-08-12",
+            "2026-10-13", "2026-12-05", "2026-12-31"
+        ];
+        const holidayNames = [
+            "วันขึ้นปีใหม่", "วันมาฆบูชา", "วันสงกรานต์", "วันสงกรานต์", "วันสงกรานต์",
+            "วันแรงงานแห่งชาติ", "วันเฉลิมพระชนมพรรษา ร.10", "วันอาสาฬหบูชา", "วันเข้าพรรษา", "วันแม่แห่งชาติ",
+            "วันนวมินทรมหาราช", "วันพ่อแห่งชาติ", "วันสิ้นปี"
+        ];
+
+        function OTTrackerApp() {
+            // 🛑 นำ URL จาก Google Apps Script มาใส่ในเครื่องหมายคำพูดด้านล่างนี้ 🛑
+            const GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycbxHChas1t53ngkEeNvCK_FkucVFOsfyaau1pydecPb8ESHa71uhDs53y47JmvtPVG7Lig/exec";
+
+            // โหลด State จาก LocalStorage
+            const [activeTab, setActiveTab] = useState('record');
+            const [salary, setSalary] = useState(() => Number(localStorage.getItem('ot_salary')) || 0);
+            const [holidays, setHolidays] = useState(() => JSON.parse(localStorage.getItem('ot_holidays')) || defaultHolidays);
+            const [logs, setLogs] = useState(() => JSON.parse(localStorage.getItem('ot_logs')) || []);
+            const [isSubmitting, setIsSubmitting] = useState(false);
+
+            // ระบบกรองเดือน
+            const currentMonthStr = new Date().toISOString().substring(0, 7);
+            const [selectedMonth, setSelectedMonth] = useState(currentMonthStr);
+
+            // ฟอร์มข้อมูล
+            const [formData, setFormData] = useState({
+                date: new Date().toISOString().split('T')[0],
+                jobNo: '', jobName: '', description: '',
+                startTime: '08:00', endTime: '17:00',
+                dayType: 'วันทำงานปกติ', multiplier: 1.5,
+                deductLunch: true, offSite: false
+            });
+
+            // Auto Save การตั้งค่าลงเครื่อง
+            useEffect(() => { localStorage.setItem('ot_salary', salary); }, [salary]);
+            useEffect(() => { localStorage.setItem('ot_holidays', JSON.stringify(holidays)); }, [holidays]);
+            useEffect(() => { localStorage.setItem('ot_logs', JSON.stringify(logs)); }, [logs]);
+
+            // คำนวณเวลาและเงิน (Live Preview)
+            const calculateOTDetails = () => {
+                if (!formData.startTime || !formData.endTime || salary <= 0) {
+                    return { normalHours: 0, otHours: 0, holidayPay: 0, pureOtPay: 0, otAmount: 0, travelAmount: 0, netTotal: 0 };
+                }
+                
+                const start = new Date(`2000-01-01T${formData.startTime}`);
+                let end = new Date(`2000-01-01T${formData.endTime}`);
+                if (end < start) end.setDate(end.getDate() + 1); // ข้ามคืน
+
+                const workStart = new Date(`2000-01-01T08:00`);
+                const workEnd = new Date(`2000-01-01T17:00`);
+                let normalMinutes = 0, otMinutes = 0;
+                let current = new Date(start);
+                
+                while (current < end) {
+                    const isLunchTime = current.getHours() === 12 && formData.deductLunch;
+                    if (!isLunchTime) {
+                        if (current >= workStart && current < workEnd) normalMinutes++;
+                        else otMinutes++;
+                    }
+                    current.setMinutes(current.getMinutes() + 1);
+                }
+
+                let normalHours = normalMinutes / 60, otHours = otMinutes / 60;
+                const hourlyRate = (salary / 30) / 8;
+                
+                let holidayPay = 0;
+                let pureOtPay = otHours * hourlyRate * formData.multiplier;
+                
+                // กฎหมายแรงงาน: ทำงานวันหยุดบวกเพิ่ม 1 เท่า
+                if (formData.dayType !== 'วันทำงานปกติ') {
+                    holidayPay = normalHours * hourlyRate * 1; 
+                }
+
+                let otAmount = holidayPay + pureOtPay;
+                const travelAmount = formData.offSite ? 100 : 0;
+                
+                return {
+                    normalHours: Number(normalHours.toFixed(2)), 
+                    otHours: Number(otHours.toFixed(2)),
+                    holidayPay: Math.round(holidayPay),
+                    pureOtPay: Math.round(pureOtPay),
+                    otAmount: Math.round(otAmount), 
+                    travelAmount, 
+                    netTotal: Math.round(otAmount + travelAmount)
+                };
+            };
+
+            const preview = calculateOTDetails();
+
+            // ดึงเดือนทั้งหมดที่เคยบันทึกมาเป็นตัวเลือก
+            const availableMonths = [...new Set(logs.map(l => l.date.substring(0, 7)))].sort().reverse();
+            if (!availableMonths.includes(currentMonthStr)) availableMonths.unshift(currentMonthStr);
+
+            // กรองข้อมูลเฉพาะเดือนที่เลือกเพื่อนำมาสรุปผล
+            const filteredLogs = selectedMonth === 'all' ? logs : logs.filter(log => log.date.startsWith(selectedMonth));
+            
+            const totalSummary = filteredLogs.reduce((acc, log) => {
+                let logHolidayPay = log.holidayPay !== undefined ? log.holidayPay : (log.dayType !== 'วันทำงานปกติ' ? (log.workHours * (salary / 30 / 8)) : 0);
+                let logPureOtPay = log.pureOtPay !== undefined ? log.pureOtPay : ((log.otAmount || 0) - logHolidayPay);
+
+                acc.otTotal += (log.otAmount || 0); 
+                acc.holidayPayTotal += logHolidayPay;
+                acc.pureOtPayTotal += logPureOtPay;
+                acc.travelTotal += (log.travelAllowance || 0); 
+                
+                acc.hoursTotal += (log.otHours || 0);
+                acc.holidayHoursTotal += (log.dayType !== 'วันทำงานปกติ' ? (log.workHours || 0) : 0);
+                if (log.offSite) acc.offSiteDays += 1;
+                return acc;
+            }, { otTotal: 0, holidayPayTotal: 0, pureOtPayTotal: 0, travelTotal: 0, hoursTotal: 0, holidayHoursTotal: 0, offSiteDays: 0 });
+
+            // ฟังก์ชันแปลงรูปแบบ YYYY-MM เป็นเดือนไทย
+            const formatMonthThai = (monthStr) => {
+                if (monthStr === 'all') return 'แสดงทุกเดือน (All)';
+                if (!monthStr) return '';
+                const parts = monthStr.split('-');
+                if (parts.length !== 2) return monthStr;
+                const year = parseInt(parts[0], 10);
+                const month = parseInt(parts[1], 10);
+                const thaiMonths = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+                return `${thaiMonths[month - 1]} ${year + 543}`;
+            };
+
+            const handleDateChange = (e) => {
+                const selectedDate = e.target.value;
+                if (!selectedDate) return setFormData({ ...formData, date: '' });
+                const dateObj = new Date(selectedDate);
+                const isHoliday = holidays.includes(selectedDate);
+                
+                let newDayType = 'วันทำงานปกติ';
+                let newMultiplier = 1.5;
+
+                if (isHoliday) {
+                    newDayType = 'วันหยุดนักขัตฤกษ์';
+                    newMultiplier = 3;
+                } else if (dateObj.getDay() === 0) {
+                    newDayType = 'วันหยุดประจำสัปดาห์';
+                    newMultiplier = 3; 
+                }
+                
+                setFormData({ ...formData, date: selectedDate, dayType: newDayType, multiplier: newMultiplier });
+            };
+
+            // บันทึกข้อมูล
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                if (!formData.date || !formData.jobNo || !formData.jobName) return alert('กรุณากรอกข้อมูลให้ครบถ้วน');
+                setIsSubmitting(true);
+                
+                const newLog = {
+                    id: Date.now().toString(),
+                    action: 'add',
+                    ...formData, 
+                    workHours: preview.normalHours, 
+                    otHours: preview.otHours,
+                    holidayPay: preview.holidayPay,
+                    pureOtPay: preview.pureOtPay,
+                    otAmount: preview.otAmount, 
+                    travelAllowance: preview.travelAmount, 
+                    totalIncome: preview.netTotal
+                };
+
+                // ส่งไป Google Sheets
+                if (GOOGLE_SHEET_URL && GOOGLE_SHEET_URL.startsWith('http')) {
+                    try {
+                        await fetch(GOOGLE_SHEET_URL, { 
+                            method: 'POST', 
+                            mode: 'no-cors', 
+                            body: JSON.stringify(newLog), 
+                            headers: { 'Content-Type': 'text/plain;charset=utf-8' }
+                        });
+                    } catch (error) { 
+                        console.error("Sheet Add Error:", error); 
+                    }
+                }
+
+                // บันทึกลงเครื่อง
+                setLogs([newLog, ...logs]);
+                
+                // ล้างฟอร์ม
+                setFormData(prev => ({ ...prev, jobNo: '', jobName: '', description: '', offSite: false }));
+                setIsSubmitting(false);
+                
+                alert('บันทึกข้อมูลสำเร็จ!');
+            };
+
+            // ลบข้อมูล
+            const handleDelete = async (idToDelete) => {
+                if(window.confirm('คุณต้องการลบรายการนี้ใช่หรือไม่?\n(ระบบจะลบข้อมูลออกจาก Google Sheets ของคุณด้วย)')) {
+                    
+                    setLogs(logs.filter(l => l.id !== idToDelete));
+
+                    if (GOOGLE_SHEET_URL && GOOGLE_SHEET_URL.startsWith('http')) {
+                        try {
+                            await fetch(GOOGLE_SHEET_URL, { 
+                                method: 'POST', 
+                                mode: 'no-cors', 
+                                body: JSON.stringify({ action: 'delete', id: idToDelete }), 
+                                headers: { 'Content-Type': 'text/plain;charset=utf-8' }
+                            });
+                        } catch (error) { 
+                            console.error("Sheet Delete Error:", error); 
+                        }
+                    }
+                }
+            };
+
+            return (
+                <div className="min-h-screen p-4 md:p-8 text-slate-800">
+                    <div className="max-w-5xl mx-auto space-y-6">
+                        
+                        {/* Header: เลือกเดือน */}
+                        <div className="flex justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
+                            <h2 className="text-lg font-bold text-slate-800">สรุปยอดประจำเดือน</h2>
+                            <select 
+                                value={selectedMonth} 
+                                onChange={(e) => setSelectedMonth(e.target.value)}
+                                className="p-2.5 bg-blue-50 border border-blue-100 text-blue-700 font-semibold rounded-lg outline-none cursor-pointer hover:bg-blue-100 transition-colors"
+                            >
+                                <option value="all">แสดงรวมทั้งหมด</option>
+                                {availableMonths.map(month => (
+                                    <option key={month} value={month}>{formatMonthThai(month)}</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        {/* แดชบอร์ดสรุปยอด */}
+                        <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
+                            <div className="flex flex-col md:flex-row gap-6">
+                                <div className="flex-1 bg-gradient-to-br from-blue-700 to-indigo-800 rounded-xl p-6 text-white shadow-lg relative overflow-hidden">
+                                    <div className="absolute -right-4 -top-4 w-32 h-32 bg-white opacity-5 rounded-full blur-2xl"></div>
+                                    <div className="text-blue-100 text-sm font-medium mb-1">รายได้รวมสุทธิ (Net Total)</div>
+                                    <div className="text-4xl lg:text-5xl font-extrabold mb-2">
+                                        <span className="text-blue-200 text-2xl mr-1">฿</span>
+                                        {(salary + totalSummary.otTotal + totalSummary.travelTotal).toLocaleString()}
+                                    </div>
+                                    <div className="text-xs text-blue-200 mt-4">เงินเดือน + ทำงานวันหยุด + OT + นอกสถานที่ (เฉพาะเดือนนี้)</div>
+                                </div>
+                                <div className="flex-[2] flex flex-col gap-4">
+                                    <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 focus-within:ring-2 focus-within:ring-blue-500 transition-all">
+                                        <label className="text-xs text-slate-500 font-medium mb-1">💰 ฐานเงินเดือน (Salary)</label>
+                                        <input type="number" value={salary || ''} onChange={(e) => setSalary(Number(e.target.value))} placeholder="ระบุเงินเดือนที่นี่เพื่อใช้เป็นฐานคำนวณ..." className="w-full bg-transparent text-xl font-bold text-slate-800 outline-none" />
+                                    </div>
+                                    <div className="flex flex-col sm:flex-row gap-4">
+                                        <div className="flex-1 bg-orange-50 rounded-xl p-4 border border-orange-100">
+                                            <div className="text-xs text-orange-600 font-medium mb-1">ทำงานวันหยุด</div>
+                                            <div className="text-xl font-bold text-orange-800">฿{totalSummary.holidayPayTotal.toLocaleString()}</div>
+                                            <div className="text-[11px] text-orange-500 mt-1 font-medium bg-orange-100/50 inline-block px-2 py-0.5 rounded">สะสม {totalSummary.holidayHoursTotal.toFixed(2)} ชม.</div>
+                                        </div>
+                                        <div className="flex-1 bg-blue-50 rounded-xl p-4 border border-blue-100">
+                                            <div className="text-xs text-blue-600 font-medium mb-1">ล่วงเวลา (OT)</div>
+                                            <div className="text-xl font-bold text-blue-800">฿{totalSummary.pureOtPayTotal.toLocaleString()}</div>
+                                            <div className="text-[11px] text-blue-500 mt-1 font-medium bg-blue-100/50 inline-block px-2 py-0.5 rounded">สะสม {totalSummary.hoursTotal.toFixed(2)} ชม.</div>
+                                        </div>
+                                        <div className="flex-1 bg-rose-50 rounded-xl p-4 border border-rose-100">
+                                            <div className="text-xs text-rose-600 font-medium mb-1">📍 ค่าเดินทาง</div>
+                                            <div className="text-xl font-bold text-rose-800">฿{totalSummary.travelTotal.toLocaleString()}</div>
+                                            <div className="text-[11px] text-rose-500 mt-1 font-medium bg-rose-100/50 inline-block px-2 py-0.5 rounded">สะสม {totalSummary.offSiteDays} วัน</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* เมนูแท็บ */}
+                        <div className="flex gap-2 px-2">
+                            <button onClick={() => setActiveTab('record')} className={`px-6 py-3 rounded-t-xl font-bold transition-colors ${activeTab === 'record' ? 'bg-white text-blue-700 border-t border-x border-slate-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>บันทึก OT</button>
+                            <button onClick={() => setActiveTab('settings')} className={`px-6 py-3 rounded-t-xl font-bold transition-colors ${activeTab === 'settings' ? 'bg-white text-blue-700 border-t border-x border-slate-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>ตั้งค่าวันหยุด</button>
+                        </div>
+
+                        {/* เนื้อหาแท็บ */}
+                        {activeTab === 'record' ? (
+                            <div className="bg-white rounded-b-2xl rounded-tr-2xl shadow-sm border border-slate-200 p-6 lg:p-8 -mt-2">
+                                <form onSubmit={handleSubmit} className="space-y-6">
+                                    <div className="flex flex-col md:flex-row gap-5">
+                                        <div className="flex-1">
+                                            <label className="block text-sm font-semibold text-slate-700 mb-1">วันที่ทำ OT <span className="text-red-500">*</span></label>
+                                            <input type="date" value={formData.date} onChange={handleDateChange} className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-shadow bg-white" required />
+                                        </div>
+                                        <div className="flex-1">
+                                            <label className="block text-sm font-semibold text-slate-700 mb-1">ประเภทวัน</label>
+                                            <select value={formData.dayType} onChange={(e) => setFormData({...formData, dayType: e.target.value, multiplier: e.target.value === 'วันทำงานปกติ' ? 1.5 : 3})} className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50">
+                                                <option value="วันทำงานปกติ">วันทำงานปกติ (OT 1.5 เท่า)</option>
+                                                <option value="วันหยุดประจำสัปดาห์">วันหยุดประจำสัปดาห์ (เวลาปกติ 2x / OT 3x)</option>
+                                                <option value="วันหยุดนักขัตฤกษ์">วันหยุดนักขัตฤกษ์ (เวลาปกติ 2x / OT 3x)</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-col md:flex-row gap-5">
+                                        <div className="flex-1">
+                                            <label className="block text-sm font-semibold text-slate-700 mb-1">Job No. <span className="text-red-500">*</span></label>
+                                            <input type="text" value={formData.jobNo} onChange={e => setFormData({...formData, jobNo: e.target.value})} placeholder="เช่น J-2026-001" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500" required />
+                                        </div>
+                                        <div className="flex-1">
+                                            <label className="block text-sm font-semibold text-slate-700 mb-1">ชื่องาน <span className="text-red-500">*</span></label>
+                                            <input type="text" value={formData.jobName} onChange={e => setFormData({...formData, jobName: e.target.value})} placeholder="เช่น งานตรวจสอบหน้างาน" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500" required />
+                                        </div>
+                                    </div>
+                                    <div className="bg-slate-50 p-5 rounded-xl border border-slate-200">
+                                        <label className="block text-sm font-bold text-slate-800 mb-4">⏰ กำหนดเวลาเข้า-ออกงาน</label>
+                                        <div className="flex flex-col md:flex-row gap-5 mb-5">
+                                            <div className="flex-1">
+                                                <label className="block text-xs font-semibold text-slate-500 mb-1">เวลาเริ่ม (Start)</label>
+                                                <input type="time" lang="en-GB" value={formData.startTime} onChange={e => setFormData({...formData, startTime: e.target.value})} className="w-full p-3 border border-slate-300 rounded-lg bg-white font-bold text-lg focus:ring-2 focus:ring-blue-500" required />
+                                            </div>
+                                            <div className="flex-1">
+                                                <label className="block text-xs font-semibold text-slate-500 mb-1">เวลาออก (End)</label>
+                                                <input type="time" lang="en-GB" value={formData.endTime} onChange={e => setFormData({...formData, endTime: e.target.value})} className="w-full p-3 border border-slate-300 rounded-lg bg-white font-bold text-lg focus:ring-2 focus:ring-blue-500" required />
+                                            </div>
+                                        </div>
+                                        <div className="flex flex-col sm:flex-row gap-5 pt-4 border-t border-slate-200">
+                                            <label className="flex items-center gap-2 cursor-pointer group">
+                                                <input type="checkbox" checked={formData.deductLunch} onChange={e => setFormData({...formData, deductLunch: e.target.checked})} className="rounded text-blue-600 w-5 h-5 focus:ring-blue-500 cursor-pointer" />
+                                                <span className="text-sm font-medium text-slate-700 group-hover:text-blue-700 transition-colors">หักพักเที่ยง 1 ชม. (12:00-13:00)</span>
+                                            </label>
+                                            <label className="flex items-center gap-2 cursor-pointer group">
+                                                <input type="checkbox" checked={formData.offSite} onChange={e => setFormData({...formData, offSite: e.target.checked})} className="rounded text-rose-500 w-5 h-5 focus:ring-rose-500 cursor-pointer" />
+                                                <span className="text-sm font-bold text-rose-600 group-hover:text-rose-700 transition-colors bg-rose-100/50 px-2 py-1 rounded">📍 นอกสถานที่ (+100)</span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                    
+                                    <input 
+                                        type="text" 
+                                        value={formData.description} 
+                                        onChange={e => setFormData({...formData, description: e.target.value})} 
+                                        placeholder="รายละเอียดเพิ่มเติม (ไม่บังคับ)..." 
+                                        className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
+                                    />
+
+                                    {/* กล่อง Preview คำนวณ */}
+                                    <div className="bg-slate-900 rounded-xl p-5 text-white shadow-md">
+                                        <div className="flex flex-col md:flex-row justify-between items-center gap-6">
+                                            <div className="flex gap-6 w-full md:w-auto">
+                                                <div className="flex-1">
+                                                    <span className="text-slate-400 block text-xs uppercase tracking-wider mb-1">{formData.dayType === 'วันทำงานปกติ' ? 'เวลาปกติ' : 'ทำงานวันหยุด (+1x)'}</span>
+                                                    <div className="flex items-end gap-2">
+                                                        <span className="text-xl font-bold">{preview.normalHours} <span className="text-sm font-normal">ชม.</span></span>
+                                                    </div>
+                                                    {formData.dayType !== 'วันทำงานปกติ' && <span className="block text-xs font-bold text-orange-400 mt-1">฿{preview.holidayPay.toLocaleString()}</span>}
+                                                </div>
+                                                <div className="w-px bg-slate-700"></div>
+                                                <div className="flex-1">
+                                                    <span className="text-slate-400 block text-xs uppercase tracking-wider mb-1">ล่วงเวลา (OT)</span>
+                                                    <span className="text-xl font-bold text-blue-400">{preview.otHours} <span className="text-sm font-normal text-blue-300">ชม.</span></span>
+                                                    <span className="block text-xs font-bold text-blue-400 mt-1">฿{preview.pureOtPay.toLocaleString()}</span>
+                                                </div>
+                                                <div className="w-px bg-slate-700 hidden sm:block"></div>
+                                                <div className="flex-1 hidden sm:block">
+                                                    <span className="text-slate-400 block text-xs uppercase tracking-wider mb-1">ยอดรวมรายการนี้</span>
+                                                    <span className="font-extrabold text-emerald-400 text-2xl">฿{preview.netTotal.toLocaleString()}</span>
+                                                </div>
+                                            </div>
+                                            
+                                            {/* สำหรับมือถือ */}
+                                            <div className="w-full flex justify-between items-center sm:hidden border-t border-slate-700 pt-3">
+                                                <span className="text-slate-400 text-xs uppercase">ยอดรวมรายการนี้</span>
+                                                <span className="font-extrabold text-emerald-400 text-2xl">฿{preview.netTotal.toLocaleString()}</span>
+                                            </div>
+
+                                            <button type="submit" disabled={isSubmitting} className="w-full md:w-auto bg-blue-600 hover:bg-blue-500 px-8 py-3.5 rounded-lg font-bold shadow-lg transition-all flex items-center justify-center gap-2">
+                                                {isSubmitting ? 'กำลังบันทึก...' : '💾 บันทึกข้อมูล'}
+                                            </button>
+                                        </div>
+                                        {formData.dayType !== 'วันทำงานปกติ' && (
+                                            <div className="text-[10px] text-slate-400 mt-4 pt-3 border-t border-slate-800 leading-relaxed">
+                                                * หมายเหตุ: ค่าแรงเวลาปกติในวันหยุดระบบจะคิดบวกเพิ่ม 1 เท่า (คุณได้ฐานเงินเดือนไปแล้ว 1 เท่า รวมเป็น 2 เท่า)
+                                            </div>
+                                        )}
+                                    </div>
+                                </form>
+                            </div>
+                        ) : (
+                            <div className="bg-white rounded-b-2xl rounded-tr-2xl shadow-sm border border-slate-200 p-6 lg:p-8 -mt-2">
+                                
+                                <div className="flex justify-between items-center mb-6 pb-4 border-b border-slate-100">
+                                    <h3 className="text-lg font-bold text-slate-800">📅 วันหยุดนักขัตฤกษ์ของบริษัท (13 วัน)</h3>
+                                    <button onClick={() => {if(confirm('รีเซ็ตกลับเป็นปี 2569 ของบริษัทหรือไม่?')) setHolidays(defaultHolidays)}} className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-4 py-2 rounded-full font-bold transition-colors">🔄 รีเซ็ตค่าเริ่มต้น</button>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-5">
+                                    {[...Array(13)].map((_, i) => (
+                                        <div key={i} className="flex flex-col gap-1.5 p-3 bg-slate-50 border border-slate-100 rounded-lg">
+                                            <label className="text-xs font-bold text-slate-500">{holidayNames[i] || `วันหยุดที่ ${i + 1}`}</label>
+                                            <input type="date" value={holidays[i] || ''} onChange={(e) => { const newH = [...holidays]; newH[i] = e.target.value; setHolidays(newH); }} className="p-2 border border-slate-300 rounded bg-white outline-none focus:ring-1 focus:ring-blue-500" />
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                        
+                        {/* ตารางประวัติ */}
+                        {filteredLogs.length > 0 && (
+                            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden mt-8">
+                                <div className="p-5 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
+                                    <h3 className="font-bold text-slate-800">ประวัติการทำงาน ({selectedMonth === 'all' ? 'ทุกเดือน' : formatMonthThai(selectedMonth)})</h3>
+                                    <span className="text-xs bg-slate-200 text-slate-700 font-bold px-3 py-1 rounded-full">{filteredLogs.length} รายการ</span>
+                                </div>
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-sm text-left">
+                                        <thead className="bg-white text-xs uppercase text-slate-500 border-b border-slate-100">
+                                            <tr>
+                                                <th className="px-5 py-4">วันที่ / ชื่องาน</th>
+                                                <th className="px-5 py-4 text-center">เวลาปกติ / OT</th>
+                                                <th className="px-5 py-4 text-right">ยอดสุทธิ</th>
+                                                <th className="px-5 py-4 text-center">จัดการ</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100">
+                                            {filteredLogs.map((log) => (
+                                                <tr key={log.id} className="hover:bg-slate-50 transition-colors">
+                                                    <td className="px-5 py-4">
+                                                        <div className="font-bold text-slate-900">{log.date}</div>
+                                                        <div className="text-xs text-slate-500 mt-1">{log.jobName}</div>
+                                                    </td>
+                                                    <td className="px-5 py-4 text-center text-xs">
+                                                        <div className="text-slate-500">
+                                                            {log.dayType === 'วันทำงานปกติ' ? 'ปกติ' : 'วันหยุด'}: <span className="font-bold text-slate-700">{log.workHours}</span>
+                                                        </div>
+                                                        <div className="text-blue-500 mt-1">
+                                                            OT: <span className="font-bold">{log.otHours}</span>
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-5 py-4 text-right">
+                                                        <div className="font-bold text-emerald-600 text-base">฿{log.totalIncome.toLocaleString()}</div>
+                                                        {log.offSite && <span className="text-[10px] text-rose-500 font-bold bg-rose-50 px-2 py-0.5 rounded mt-1 inline-block">นอกสถานที่</span>}
+                                                    </td>
+                                                    <td className="px-5 py-4 text-center">
+                                                        <button 
+                                                            onClick={() => handleDelete(log.id)} 
+                                                            className="text-slate-400 hover:text-white hover:bg-rose-500 p-2 rounded-lg transition-all"
+                                                            title="ลบรายการ"
+                                                        >
+                                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<OTTrackerApp />);
+    </script>
+</body>
+</html>
