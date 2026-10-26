@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0">
+    <title>ระบบบันทึก OT - บริษัท ไทเกอร์ รัน</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600&display=swap');
+        body { font-family: 'Prompt', sans-serif; }
+        .hide-scroll::-webkit-scrollbar { height: 4px; }
+        .hide-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+    </style>
+</head>
+<body class="bg-blue-50 text-gray-800 p-2 sm:p-4 md:p-8 min-h-screen">
+    <div id="root" class="max-w-5xl mx-auto"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        const DEFAULT_HOLIDAYS_2569 = {
+            "2026-01-01": "วันปีใหม่",
+            "2026-03-03": "วันมาฆบูชา",
+            "2026-04-13": "วันสงกรานต์",
+            "2026-04-14": "วันสงกรานต์",
+            "2026-04-15": "วันสงกรานต์",
+            "2026-05-01": "วันแรงงานแห่งชาติ",
+            "2026-07-28": "วันเฉลิมพระชนมพรรษา รัชกาลที่ 10",
+            "2026-07-29": "วันอาสาฬหบูชา",
+            "2026-07-30": "วันเข้าพรรษา",
+            "2026-08-12": "วันแม่แห่งชาติ",
+            "2026-10-13": "วันนวมินทรมหาราช",
+            "2026-12-05": "วันพ่อแห่งชาติ",
+            "2026-12-31": "วันสิ้นปี"
+        };
+
+        const App = () => {
+            const [records, setRecords] = useState([]);
+            const [salary, setSalary] = useState(15000);
+            const [holidays, setHolidays] = useState(DEFAULT_HOLIDAYS_2569);
+            const [currentMonth, setCurrentMonth] = useState(`${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`);
+            const [showSettings, setShowSettings] = useState(false);
+
+            const [newHolidayDate, setNewHolidayDate] = useState("");
+            const [newHolidayName, setNewHolidayName] = useState("");
+
+            const [date, setDate] = useState("");
+            const [jobNo, setJobNo] = useState("");
+            const [jobName, setJobName] = useState("");
+            const [details, setDetails] = useState("");
+            const [startTime, setStartTime] = useState("08:00");
+            const [endTime, setEndTime] = useState("17:00");
+            const [isOffsite, setIsOffsite] = useState(false);
+
+            useEffect(() => {
+                const savedRecords = localStorage.getItem('ot_records');
+                if (savedRecords) setRecords(JSON.parse(savedRecords));
+                const savedSalary = localStorage.getItem('ot_salary');
+                if (savedSalary) setSalary(Number(savedSalary));
+                const savedHolidays = localStorage.getItem('ot_holidays');
+                if (savedHolidays) setHolidays(JSON.parse(savedHolidays));
+            }, []);
+
+            const saveToLocal = (newRecords, newSalary, newHolidays) => {
+                if (newRecords) { localStorage.setItem('ot_records', JSON.stringify(newRecords)); setRecords(newRecords); }
+                if (newSalary) { localStorage.setItem('ot_salary', newSalary.toString()); setSalary(newSalary); }
+                if (newHolidays) { localStorage.setItem('ot_holidays', JSON.stringify(newHolidays)); setHolidays(newHolidays); }
+            };
+
+            const isHolidayDate = (dString) => {
+                if(!dString) return false;
+                const d = new Date(dString);
+                return d.getDay() === 0 || holidays[dString] !== undefined;
+            };
+
+            const getHolidayName = (dString) => {
+                const d = new Date(dString);
+                if (d.getDay() === 0) return "วันอาทิตย์";
+                if (holidays[dString]) return `วันหยุด: ${holidays[dString]}`;
+                return "";
+            };
+
+            const calculateHours = (sTime, eTime) => {
+                if (!sTime || !eTime) return { otHours: 0, normalWorkedElapsed: 0, otString: "" };
+                const [sh, sm] = sTime.split(':').map(Number);
+                const [eh, em] = eTime.split(':').map(Number);
+                const start = sh + sm / 60;
+                const end = eh + em / 60;
+                if (start >= end) return { otHours: 0, normalWorkedElapsed: 0, otString: "" };
+
+                const normalStart = 8;
+                const normalEnd = 17;
+                let normalWorkedElapsed = Math.min(end, normalEnd) - Math.max(start, normalStart);
+                if (normalWorkedElapsed < 0) normalWorkedElapsed = 0;
+                const otHours = (end - start) - normalWorkedElapsed;
+
+                let otStrArr = [];
+                if (start < normalStart) otStrArr.push(`${String(sh).padStart(2, '0')}:${String(sm).padStart(2, '0')}-08:00`);
+                if (end > normalEnd) {
+                    const otStartStr = start > normalEnd ? `${String(sh).padStart(2, '0')}:${String(sm).padStart(2, '0')}` : '17:00';
+                    otStrArr.push(`${otStartStr}-${String(eh).padStart(2, '0')}:${String(em).padStart(2, '0')}`);
+                }
+
+                return { otHours, normalWorkedElapsed, otString: otStrArr.join(', ') };
+            };
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                if (!date) return Swal.fire('แจ้งเตือน', 'กรุณาเลือกวันที่', 'warning');
+                const newRecord = { id: Date.now().toString(), date, jobNo, jobName, details, startTime, endTime, isOffsite };
+                saveToLocal([...records, newRecord], null, null);
+                Swal.fire({ title: 'บันทึกสำเร็จ!', icon: 'success', timer: 1500, showConfirmButton: false });
+                setDate(""); setStartTime("08:00"); setEndTime("17:00"); setIsOffsite(false);
+            };
+
+            const handleDelete = (id) => {
+                Swal.fire({
+                    title: 'ต้องการลบข้อมูล?', text: "ข้อมูลนี้จะไม่สามารถกู้คืนได้", icon: 'warning',
+                    showCancelButton: true, confirmButtonColor: '#d33', cancelButtonColor: '#3085d6', confirmButtonText: 'ลบเลย!'
+                }).then((result) => {
+                    if (result.isConfirmed) {
+                        saveToLocal(records.filter(r => r.id !== id), null, null);
+                        Swal.fire('ลบแล้ว!', 'ข้อมูลถูกลบเรียบร้อยแล้ว', 'success');
+                    }
+                });
+            };
+
+            const loadDefaultHolidays = () => {
+                saveToLocal(null, null, DEFAULT_HOLIDAYS_2569);
+                Swal.fire('โหลดสำเร็จ', 'ตั้งค่าวันหยุดเป็น 13 วัน เรียบร้อย', 'success');
+            };
+
+            const handleAddOrEditHoliday = () => {
+                if (!newHolidayDate || !newHolidayName) {
+                    Swal.fire('แจ้งเตือน', 'กรุณาเลือกวันที่และใส่ชื่อวันหยุดให้ครบถ้วน', 'warning');
+                    return;
+                }
+                const updatedHolidays = { ...holidays, [newHolidayDate]: newHolidayName };
+                saveToLocal(null, null, updatedHolidays);
+                setNewHolidayDate(""); setNewHolidayName("");
+            };
+
+            const handleExport = () => {
+                let csvContent = "\uFEFFใบบันทึกทำงานล่วงเวลา (O.T)\n";
+                const [y, m] = currentMonth.split('-');
+                const thaiMonths = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
+                const mName = thaiMonths[parseInt(m) - 1];
+                const thaiYear = parseInt(y) + 543;
+                
+                csvContent += `เดือน ${mName} ปี ${thaiYear}\nชื่อ............................................................ หน่วยงาน............................................................\n\n`;
+                csvContent += `วันที่,Job. NO.,ชื่อ Job,รายละเอียดงาน,เวลาทำ O.T,จำนวน ชม. x 1.5,จำนวน ชม. x 3,ผู้อนุมัติ,หมายเหตุ\n`;
+
+                const filtered = records.filter(r => r.date.startsWith(currentMonth)).sort((a,b) => new Date(a.date) - new Date(b.date));
+                filtered.forEach(r => {
+                    const isHol = isHolidayDate(r.date);
+                    const { otHours, otString } = calculateHours(r.startTime, r.endTime);
+                    const dParts = r.date.split('-');
+                    const dFormatted = `${dParts[2]}/${dParts[1]}/${dParts[0].substring(2)}`;
+                    
+                    const ot15 = (!isHol && otHours > 0) ? otHours.toFixed(1) : "";
+                    const ot3 = (isHol && otHours > 0) ? otHours.toFixed(1) : "";
+                    
+                    let remarks = [];
+                    const hName = getHolidayName(r.date);
+                    if(hName) remarks.push(hName);
+                    if(r.isOffsite) remarks.push("นอกสถานที่");
+
+                    csvContent += `${dFormatted},"${r.jobNo || ''}","${r.jobName || ''}","${r.details || ''}","${otString}",${ot15},${ot3},,"${remarks.join(', ')}"\n`;
+                });
+
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement("a");
+                link.setAttribute("href", URL.createObjectURL(blob));
+                link.setAttribute("download", `OT_${mName}_${thaiYear}.csv`);
+                document.body.appendChild(link); link.click(); document.body.removeChild(link);
+            };
+
+            const formatMoney = (amount) => {
+                return amount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            };
+
+            const monthRecords = records.filter(r => r.date.startsWith(currentMonth));
+            const baseDaily = salary / 30;
+            const hourlyRate = baseDaily / 8;
+            
+            let totalExtraDayPay = 0, totalAllowance = 0;
+            let ot15Hours = 0, ot3Hours = 0;
+            let ot15Pay = 0, ot3Pay = 0;
+
+            monthRecords.forEach(r => {
+                const isHol = isHolidayDate(r.date);
+                const { otHours, normalWorkedElapsed } = calculateHours(r.startTime, r.endTime);
+                
+                if (isHol) {
+                    ot3Hours += otHours;
+                    ot3Pay += otHours * hourlyRate * 3;
+                    if (normalWorkedElapsed > 0) totalExtraDayPay += baseDaily; 
+                } else {
+                    ot15Hours += otHours;
+                    ot15Pay += otHours * hourlyRate * 1.5;
+                }
+                
+                if (r.isOffsite) totalAllowance += 100;
+            });
+
+            const grandTotal = salary + totalExtraDayPay + ot15Pay + ot3Pay + totalAllowance;
+
+            return (
+                <div className="bg-white rounded-xl md:rounded-2xl shadow-xl p-4 md:p-6 w-full">
+                    {/* Header */}
+                    <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-4 md:mb-6">
+                        <div className="w-full lg:w-auto mb-3 lg:mb-0">
+                            <h1 className="text-xl md:text-2xl font-bold text-blue-600">ระบบบันทึก OT</h1>
+                            <p className="text-gray-500 text-xs md:text-sm">บันทึกข้อมูลแบบออฟไลน์ (Local Storage)</p>
+                        </div>
+                        <div className="flex flex-wrap md:flex-nowrap gap-2 w-full lg:w-auto">
+                            <input type="month" value={currentMonth} onChange={(e) => setCurrentMonth(e.target.value)} 
+                                className="flex-1 md:flex-none px-3 py-2 border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-400 outline-none text-base" />
+                            <button onClick={handleExport} className="flex-1 md:flex-none justify-center px-3 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 flex items-center gap-1 text-sm md:text-base font-medium">
+                                Export CSV
+                            </button>
+                            <button onClick={() => setShowSettings(true)} className="flex-1 md:flex-none px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm md:text-base font-medium">
+                                ตั้งค่า
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Banner สรุปรายได้รวม */}
+                    <div className="bg-gradient-to-r from-blue-500 to-blue-400 rounded-xl p-4 md:p-6 text-white shadow-lg mb-4 flex justify-between items-center">
+                        <div>
+                            <h2 className="text-sm md:text-lg font-medium opacity-90">รายได้รวมทั้งหมด (เดือนนี้)</h2>
+                            <div className="text-2xl md:text-4xl font-bold mt-1">฿{formatMoney(grandTotal)}</div>
+                        </div>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-10 h-10 md:w-12 md:h-12 opacity-80"><rect x="4" y="2" width="16" height="20" rx="2" ry="2"></rect><line x1="8" y1="6" x2="16" y2="6"></line><line x1="16" y1="14" x2="16.01" y2="14"></line><line x1="16" y1="10" x2="16.01" y2="10"></line><line x1="16" y1="18" x2="16.01" y2="18"></line><line x1="12" y1="14" x2="12.01" y2="14"></line><line x1="12" y1="10" x2="12.01" y2="10"></line><line x1="12" y1="18" x2="12.01" y2="18"></line><line x1="8" y1="14" x2="8.01" y2="14"></line><line x1="8" y1="10" x2="8.01" y2="10"></line><line x1="8" y1="18" x2="8.01" y2="18"></line></svg>
+                    </div>
+
+                    {/* แถบสรุปสถิติ OT และเงินพิเศษ (ปรับปรุงใหม่ตามสั่ง) */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4 mb-4 md:mb-6">
+                        <div className="bg-blue-50 border border-blue-100 p-3 rounded-xl text-center shadow-sm flex flex-col justify-center">
+                            <p className="text-[11px] md:text-sm text-gray-500 mb-1">OT ปกติ (x1.5)</p>
+                            <p className="text-lg md:text-xl font-bold text-blue-700">฿{formatMoney(ot15Pay)}</p>
+                            <p className="text-[10px] md:text-xs text-gray-500 mt-0.5">{ot15Hours.toFixed(1)} ชม.</p>
+                        </div>
+                        <div className="bg-orange-50 border border-orange-100 p-3 rounded-xl text-center shadow-sm flex flex-col justify-center">
+                            <p className="text-[11px] md:text-sm text-gray-500 mb-1">OT วันหยุด (x3)</p>
+                            <p className="text-lg md:text-xl font-bold text-orange-600">฿{formatMoney(ot3Pay)}</p>
+                            <p className="text-[10px] md:text-xs text-gray-500 mt-0.5">{ot3Hours.toFixed(1)} ชม.</p>
+                        </div>
+                        <div className="bg-green-50 border border-green-100 p-3 rounded-xl text-center shadow-sm flex flex-col justify-center">
+                            <p className="text-[11px] md:text-sm text-gray-500 mb-1">ค่าทำงานวันหยุด (+1 เท่า)</p>
+                            <p className="text-lg md:text-xl font-bold text-green-600">฿{formatMoney(totalExtraDayPay)}</p>
+                        </div>
+                        <div className="bg-purple-50 border border-purple-100 p-3 rounded-xl text-center shadow-sm flex flex-col justify-center">
+                            <p className="text-[11px] md:text-sm text-gray-500 mb-1">เงินไปนอกสถานที่</p>
+                            <p className="text-lg md:text-xl font-bold text-purple-600">฿{formatMoney(totalAllowance)}</p>
+                        </div>
+                    </div>
+
+                    <div className="grid lg:grid-cols-3 gap-4 md:gap-6">
+                        {/* ฟอร์มบันทึก */}
+                        <div className="lg:col-span-1 bg-blue-50/50 p-4 md:p-5 rounded-xl border border-blue-100">
+                            <h2 className="text-base md:text-lg font-bold text-gray-700 mb-3 md:mb-4 flex items-center gap-2">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5 text-blue-500"><path d="M12 5v14M5 12h14"></path></svg>
+                                บันทึกเวลาทำงาน
+                            </h2>
+                            <form onSubmit={handleSubmit} className="space-y-3 md:space-y-4">
+                                <div>
+                                    <label className="block text-xs md:text-sm text-gray-600 mb-1">วันที่</label>
+                                    <input type="date" required value={date} onChange={(e) => setDate(e.target.value)}
+                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-400 outline-none text-base" />
+                                    {isHolidayDate(date) && <p className="text-[10px] md:text-xs text-orange-500 mt-1 font-medium">* ระบบพบว่าเป็นวันหยุด (OT เรท x3)</p>}
+                                </div>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <div>
+                                        <label className="block text-xs md:text-sm text-gray-600 mb-1">เริ่มงาน</label>
+                                        <input type="time" required value={startTime} onChange={(e) => setStartTime(e.target.value)}
+                                            className="w-full px-2 py-2 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-400 text-base" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs md:text-sm text-gray-600 mb-1">เลิกงาน</label>
+                                        <input type="time" required value={endTime} onChange={(e) => setEndTime(e.target.value)}
+                                            className="w-full px-2 py-2 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-400 text-base" />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-xs md:text-sm text-gray-600 mb-1">Job No.</label>
+                                    <input type="text" placeholder="ระบุ Job No." value={jobNo} onChange={(e) => setJobNo(e.target.value)}
+                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-400 outline-none text-base" />
+                                </div>
+                                <div>
+                                    <label className="block text-xs md:text-sm text-gray-600 mb-1">ชื่อ Job</label>
+                                    <input type="text" placeholder="ระบุชื่อ Job" value={jobName} onChange={(e) => setJobName(e.target.value)}
+                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-400 outline-none text-base" />
+                                </div>
+                                <div>
+                                    <label className="block text-xs md:text-sm text-gray-600 mb-1">รายละเอียดงาน</label>
+                                    <input type="text" placeholder="รายละเอียด..." value={details} onChange={(e) => setDetails(e.target.value)}
+                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-400 outline-none text-base" />
+                                </div>
+                                <label className="flex items-center gap-2 cursor-pointer p-2 bg-white border border-gray-200 rounded-lg">
+                                    <input type="checkbox" checked={isOffsite} onChange={(e) => setIsOffsite(e.target.checked)} className="w-5 h-5 md:w-4 md:h-4 text-blue-500 rounded" />
+                                    <span className="text-sm text-gray-700">นอกสถานที่ (+100 ฿)</span>
+                                </label>
+                                <button type="submit" className="w-full py-2.5 md:py-3 bg-blue-500 text-white rounded-lg font-medium hover:bg-blue-600 shadow-md transition-all text-base">บันทึกข้อมูล</button>
+                            </form>
+                        </div>
+
+                        {/* ตาราง */}
+                        <div className="lg:col-span-2">
+                            <div className="overflow-x-auto hide-scroll border border-gray-200 rounded-xl bg-white">
+                                <table className="w-full text-left text-xs md:text-sm whitespace-nowrap min-w-[500px]">
+                                    <thead className="bg-gray-50 text-gray-600 border-b">
+                                        <tr>
+                                            <th className="p-2 md:p-3">วันที่</th>
+                                            <th className="p-2 md:p-3">เวลา</th>
+                                            <th className="p-2 md:p-3">รายละเอียด</th>
+                                            <th className="p-2 md:p-3">ชั่วโมง OT</th>
+                                            <th className="p-2 md:p-3 text-right">ยอดรวม</th>
+                                            <th className="p-2 md:p-3 text-center">ลบ</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {monthRecords.length === 0 ? (
+                                            <tr><td colSpan="6" className="p-6 md:p-8 text-center text-gray-400">ยังไม่มีข้อมูลในเดือนนี้</td></tr>
+                                        ) : monthRecords.sort((a,b) => new Date(b.date) - new Date(a.date)).map(record => {
+                                            const isHol = isHolidayDate(record.date);
+                                            const { otHours, normalWorkedElapsed } = calculateHours(record.startTime, record.endTime);
+                                            const rowTotal = (otHours * hourlyRate * (isHol ? 3 : 1.5)) + ((isHol && normalWorkedElapsed > 0) ? baseDaily : 0) + (record.isOffsite ? 100 : 0);
+                                            return (
+                                                <tr key={record.id} className="border-b hover:bg-blue-50/30 transition-colors">
+                                                    <td className="p-2 md:p-3">
+                                                        <div className="font-medium text-gray-800">{record.date}</div>
+                                                        {isHol && <div className="text-[10px] md:text-xs text-orange-500">{getHolidayName(record.date)}</div>}
+                                                    </td>
+                                                    <td className="p-2 md:p-3 text-gray-600">{record.startTime}-{record.endTime}</td>
+                                                    <td className="p-2 md:p-3">
+                                                        <div className="font-medium text-blue-700">{record.jobNo}</div>
+                                                        <div className="text-[10px] md:text-xs text-gray-500 truncate max-w-[120px] md:max-w-[200px]">{record.jobName}</div>
+                                                        {record.isOffsite && <span className="inline-block mt-0.5 px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded text-[9px] md:text-[10px]">นอกสถานที่</span>}
+                                                    </td>
+                                                    <td className="p-2 md:p-3">
+                                                        {otHours > 0 ? <div className="font-medium">{otHours.toFixed(1)} ชม.</div> : "-"}
+                                                        {otHours > 0 && <div className="text-[10px] md:text-xs text-gray-500">เรท x{isHol ? 3 : 1.5}</div>}
+                                                    </td>
+                                                    <td className="p-2 md:p-3 text-right font-medium text-green-600">+฿{formatMoney(rowTotal)}</td>
+                                                    <td className="p-2 md:p-3 text-center">
+                                                        <button onClick={() => handleDelete(record.id)} className="text-red-400 hover:text-red-600 p-1">
+                                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 md:w-5 md:h-5"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            )
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Modal ตั้งค่า */}
+                    {showSettings && (
+                        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-3 sm:p-4 z-50">
+                            <div className="bg-white rounded-2xl w-full max-w-lg p-4 md:p-6 max-h-[90vh] overflow-y-auto">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h2 className="text-lg md:text-xl font-bold text-gray-800">ตั้งค่าระบบ</h2>
+                                    <button onClick={() => setShowSettings(false)} className="text-gray-400 hover:text-gray-600 p-1">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-6 h-6"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                                    </button>
+                                </div>
+                                <div className="space-y-4 md:space-y-6">
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1.5">เงินเดือนฐาน (สำหรับคำนวณ)</label>
+                                        <input type="number" value={salary} onChange={(e) => saveToLocal(null, Number(e.target.value), null)}
+                                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-base outline-none focus:border-blue-400" />
+                                    </div>
+                                    <div>
+                                        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-2 gap-2">
+                                            <label className="block text-sm font-medium text-gray-700">จัดการวันหยุดประจำปี</label>
+                                            <button onClick={loadDefaultHolidays} className="text-xs md:text-sm text-blue-500 hover:underline bg-blue-50 px-2 py-1 rounded">รีเซ็ตตามประกาศ 2569</button>
+                                        </div>
+                                        
+                                        <div className="flex flex-col sm:flex-row gap-2 mb-3 bg-blue-50/50 p-2 sm:p-3 rounded-lg border border-blue-100">
+                                            <input type="date" value={newHolidayDate} onChange={(e) => setNewHolidayDate(e.target.value)} 
+                                                className="w-full sm:w-1/3 px-2 py-2 border border-gray-300 rounded text-base outline-none focus:border-blue-400" />
+                                            <input type="text" placeholder="ชื่อวันหยุด" value={newHolidayName} onChange={(e) => setNewHolidayName(e.target.value)} 
+                                                className="w-full sm:flex-1 px-2 py-2 border border-gray-300 rounded text-base outline-none focus:border-blue-400" />
+                                            <button onClick={handleAddOrEditHoliday} 
+                                                className="w-full sm:w-auto px-3 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 text-sm font-medium transition-colors">
+                                                เพิ่ม
+                                            </button>
+                                        </div>
+
+                                        <div className="bg-gray-50 border border-gray-200 rounded-lg p-2 space-y-1.5 max-h-48 md:max-h-60 overflow-y-auto">
+                                            {Object.keys(holidays).sort().map(d => (
+                                                <div key={d} className="flex justify-between items-center bg-white p-2 rounded border border-gray-100 text-xs md:text-sm">
+                                                    <div className="flex-1 truncate pr-2">
+                                                        <span className="font-medium">{d}</span>
+                                                        <span className="text-gray-500 ml-1.5">{holidays[d]}</span>
+                                                    </div>
+                                                    <button onClick={() => {
+                                                        const newHol = {...holidays}; delete newHol[d]; saveToLocal(null, null, newHol);
+                                                    }} className="text-red-400 hover:text-red-600 p-1 flex-shrink-0">✕</button>
+                                                </div>
+                                            ))}
+                                            {Object.keys(holidays).length === 0 && <p className="text-center text-xs text-gray-400 py-2">ไม่มีข้อมูลวันหยุด</p>}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
